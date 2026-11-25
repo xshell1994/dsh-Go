@@ -1,0 +1,161 @@
+# Builds a signed arm64 release APK on a runner, from a clean checkout.
+#
+#   Actions → Android release → Run workflow (branch: whatever carries the change)
+#
+# Nothing is built locally: the APK here is the one that goes on a phone. Two
+# things this job has to produce for itself, because neither is in the repository:
+#   - the bundled Linux runtime (runtime/out/arm64-v8a), built by
+#     runtime/build-runtime.sh from pinned, hashed downloads;
+#   - the Gradle wrapper (app/android/.gitignore keeps gradlew and the wrapper
+#     jar out), generated here from the pinned Gradle version.
+#
+# Signing comes from Actions secrets; a checkout without them builds a release
+# APK signed with the debug key, which is why the job refuses to upload one:
+#   KEYSTORE_BASE64   the keystore file, base64
+#   STORE_PASSWORD    keystore password
+#   KEY_ALIAS         key alias inside it
+#   KEY_PASSWORD      that key's password
+name: Android release
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_name:
+        description: 'Version name (X.Y.Z); empty = app/pubspec.yaml'
+        required: false
+      build_number:
+        description: 'versionCode (2..2100000000); empty = current build minute'
+        required: false
+      companion:
+        description: 'Build with the companion pack (~/keys secret, not configured yet)'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: 3.47.7
+  GRADLE_VERSION: 9.3.1
+  TZ: Asia/Shanghai
+
+jobs:
+  apk:
+    name: Signed arm64 APK
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: subosito/flutter-action@1a449444c387b1966244ae4d4f8c696479add0b2 # v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      # gradlew is not tracked, so Gradle comes from here.
+      - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
+        with:
+          gradle-version: ${{ env.GRADLE_VERSION }}
+
+      # The runtime's downloads are hashed on every run, so a stale cache is harmless.
+      - name: Restore the runtime download cache
+        id: runtime-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/.cache
+          key: runtime-downloads-v1-${{ hashFiles('runtime/build-runtime.sh', 'runtime/locks/**') }}
+          restore-keys: runtime-downloads-v1-
+
+      - name: Gradle wrapper
+        working-directory: app/android
+        run: gradle wrapper --gradle-version "$GRADLE_VERSION"
+
+      - name: Flutter dependencies and local.properties
+        working-directory: app
+        run: |
+          flutter pub get --enforce-lockfile
+          printf 'sdk.dir=%s\nflutter.sdk=%s\n' "$ANDROID_HOME" "$FLUTTER_ROOT" > android/local.properties
+
+      - name: Install the pinned NDK (libtawcroot.so)
+        run: |
+          ndk=$(python3 -c 'import json,sys; print(json.load(open("runtime/tawcroot/source.json"))["ndkVersion"])')
+          echo "$ANDROID_HOME/ndk/$ndk"
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
+
+      - name: Build the bundled runtime (arm64)
+        run: runtime/build-runtime.sh arm64-v8a
+
+      - name: Save the runtime download cache
+        if: steps.runtime-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: runtime/.cache
+          key: ${{ steps.runtime-cache.outputs.cache-primary-key }}
+
+      - name: Signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          missing=()
+          for name in KEYSTORE_BASE64 STORE_PASSWORD KEY_ALIAS KEY_PASSWORD; do
+            eval "value=\${$name:-}"
+            [ -n "$value" ] || missing+=("$name")
+          done
+          if ((${#missing[@]})); then
+            echo "::error::missing Actions secrets: ${missing[*]}. A release build must be signed with the release key."
+            exit 1
+          fi
+          keydir="$RUNNER_TEMP/keys"
+          mkdir -p "$keydir"
+          printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$keydir/release.jks"
+          # key.properties is gitignored; build.gradle.kts reads it from the root project.
+          {
+            echo "storeFile=$keydir/release.jks"
+            echo "storePassword=$STORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > app/android/key.properties
+          chmod 600 app/android/key.properties "$keydir/release.jks"
+
+      - name: Build the release APK
+        run: |
+          extra=(--no-companion)
+          if [[ "${{ inputs.companion }}" == "true" ]]; then extra=(); fi
+          args=("${extra[@]}")
+          if [[ -n "${{ inputs.build_name }}" ]]; then args+=(--build-name "${{ inputs.build_name }}"); fi
+          if [[ -n "${{ inputs.build_number }}" ]]; then args+=(--build-number "${{ inputs.build_number }}"); fi
+          tooling/build-apk.sh "${args[@]}"
+
+      - name: Name the artifact
+        id: name
+        run: |
+          version=$(sed -n 's/^version:[[:space:]]*\([^+[:space:]]*\).*/\1/p' app/pubspec.yaml)
+          if [[ -n "${{ inputs.build_name }}" ]]; then version="${{ inputs.build_name }}"; fi
+          apk=app/build/app/outputs/flutter-apk/app-arm64-release.apk
+          test -f "$apk"
+          cp "$apk" "$RUNNER_TEMP/dsh-go-$version-arm64.apk"
+          echo "file=dsh-go-$version-arm64.apk" >> "$GITHUB_OUTPUT"
+
+      - name: Upload the APK
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ${{ steps.name.outputs.file }}
+          path: ${{ runner.temp }}/${{ steps.name.outputs.file }}
+          if-no-files-found: error
+          retention-days: 30
