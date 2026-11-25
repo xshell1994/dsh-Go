@@ -68,6 +68,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
+          # Without this the action only writes its cache on the default branch, so a
+          # build on a feature branch starts from an empty cache every time and resolves
+          # all ~300 artifacts again -- one slow mirror or one 429 then fails the run.
+          cache-read-only: false
 
       # The runtime's downloads are hashed on every run, so a stale cache is harmless.
       - name: Restore the runtime download cache
@@ -77,6 +81,48 @@ jobs:
           path: runtime/.cache
           key: runtime-downloads-v1-${{ hashFiles('runtime/build-runtime.sh', 'runtime/locks/**') }}
           restore-keys: runtime-downloads-v1-
+
+      # Maven Central answers 429 to a shared runner IP often enough that the same commit
+      # failed three times in the Flutter toolchain's own buildscript (project ':gradle',
+      # from includeBuild). That buildscript declares google()/mavenCentral() itself and
+      # never sees app/android/settings.gradle.kts, so mirrors there cannot help. An init
+      # script runs before every build, included ones too, and puts the mirrors in front of
+      # whatever each build declared. gradlePluginPortal() is the real source: it answers
+      # 302 to repo.maven.apache.org, which is the host that rate-limits us.
+      - name: Maven mirrors for every build
+        run: |
+          set -euo pipefail
+          mkdir -p ~/.gradle/init.d
+          cat > ~/.gradle/init.d/maven-mirrors.gradle <<'EOF'
+          // Only the Central-shaped mirrors. The Google mirror answers 404 to Central
+          // artifacts (and has answered 502), so putting it in front of a Central
+          // resolution costs a request per artifact and can fail the whole resolution.
+          // Google's own artifacts are left to the google() repository each build declares.
+          def mirrors = [
+              'https://maven.aliyun.com/repository/gradle-plugin',
+              'https://maven.aliyun.com/repository/central',
+              'https://maven.aliyun.com/repository/public',
+          ]
+          def prepend = { repos ->
+              def existing = repos.toList()
+              repos.clear()
+              mirrors.each { u -> repos.maven { url = u } }
+              existing.each { r -> repos.add(r) }
+          }
+          gradle.beforeProject { p ->
+              prepend(p.buildscript.repositories)
+              prepend(p.repositories)
+          }
+          allprojects { p ->
+              prepend(p.buildscript.repositories)
+              prepend(p.repositories)
+          }
+          settingsEvaluated { settings ->
+              prepend(settings.pluginManagement.repositories)
+              prepend(settings.dependencyResolutionManagement.repositories)
+          }
+          EOF
+          cat ~/.gradle/init.d/maven-mirrors.gradle
 
       # app/android/settings.gradle.kts reads flutter.sdk from local.properties while it
       # resolves plugins, so this must exist before ANY Gradle invocation below, the
