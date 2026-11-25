@@ -21242,6 +21242,8 @@ class L10nZh extends L10n {
 
   @override
   String get stateChatStopSteered => '没能停下本轮，已作为插话发送';
+  @override
+  String get stateChatSendRetired => '这条没发出去，已放回输入框';
 
   @override
   String get stateChatTextOnlyModel => '当前模型未声明支持图片，已按文件发送。可换模型，或把自定义模型的输入类型设为「文本和图片」';

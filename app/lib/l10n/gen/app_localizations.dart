@@ -39126,6 +39126,12 @@ abstract class L10n {
   /// **'没能停下本轮，已作为插话发送'**
   String get stateChatStopSteered;
 
+  /// No description provided for @stateChatSendRetired.
+  ///
+  /// In zh, this message translates to:
+  /// **'这条没发出去，已放回输入框'**
+  String get stateChatSendRetired;
+
   /// No description provided for @stateChatTextOnlyModel.
   ///
   /// In zh, this message translates to:
