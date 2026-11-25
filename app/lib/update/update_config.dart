@@ -20,6 +20,15 @@
 ///   replaces the public GitHub accelerator list (empty string = none).
 library;
 
+/// Whether this build checks for and offers in-app updates at all.
+///
+/// Off in this fork: releases come from its own CI, are signed with a key the
+/// upstream APKs do not share, so an upstream release would fail to install,
+/// and the upstream feed is somebody else's server. The links below stay for
+/// the places that point at the project page (community, star prompt, share);
+/// no update request is made while this is false.
+const updatesEnabled = false;
+
 /// GitHub repository the releases live in.
 const updateRepo = 'ccch1mneyyy/dsh-go';
 

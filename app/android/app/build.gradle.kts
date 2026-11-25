@@ -28,17 +28,18 @@ val sideSuffix = ".test"
 abstract class SideShortcuts : DefaultTask() {
     @get:InputFile abstract val source: RegularFileProperty
     @get:Input abstract val suffix: Property<String>
+    @get:Input abstract val applicationId: Property<String>
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
     @TaskAction
     fun write() {
-        val main = "android:targetPackage=\"io.github.ccch1mneyyy.dsh_app\""
+        val main = "android:targetPackage=\"${applicationId.get()}\""
         val text = source.get().asFile.readText()
         check(main in text) { "shortcuts.xml no longer names the package as $main" }
         val out = outputDir.get().asFile.resolve("xml")
         out.mkdirs()
         out.resolve("shortcuts.xml").writeText(
-            text.replace(main, "android:targetPackage=\"io.github.ccch1mneyyy.dsh_app${suffix.get()}\""))
+            text.replace(main, "android:targetPackage=\"${applicationId.get()}${suffix.get()}\""))
     }
 }
 
@@ -57,6 +58,11 @@ fun buildMinuteVersionCode(): Int {
     return (t.year - 2026) * 100_000_000 + t.monthValue * 1_000_000 + t.dayOfMonth * 10_000 + t.hour * 100 + t.minute
 }
 
+// The install identity: what Android uses for the data directory, permissions and
+// update compatibility. Deliberately not the namespace below (that stays the Kotlin
+// class package); keep this free of any personal account handle.
+val appId = "app.dshgo.mobile"
+
 android {
     namespace = "io.github.ccch1mneyyy.dsh_app"
     compileSdk = flutter.compileSdkVersion
@@ -72,7 +78,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "io.github.ccch1mneyyy.dsh_app"
+        applicationId = appId
         if (sideBuild) applicationIdSuffix = sideSuffix
         manifestPlaceholders["appLabel"] = if (sideBuild) "DSH Go 测试" else "DSH Go"
         // java.nio.file (symlinks while unpacking the rootfs) needs API 26.
@@ -129,6 +135,12 @@ android {
             "org/bouncycastle/pqc/crypto/picnic/lowmcL3.bin.properties",
             "org/bouncycastle/pqc/crypto/picnic/lowmcL5.bin.properties",
         )
+    }
+
+    // APPLICATION_ID is how the runtime reads its own install identity instead of
+    // a literal package name (diagnostics/SystemImeEvidence.kt, phone/SafetyGate.kt).
+    buildFeatures {
+        buildConfig = true
     }
 
     lint {
@@ -216,6 +228,7 @@ if (sideBuild) {
     val sideShortcuts = tasks.register<SideShortcuts>("sideShortcuts") {
         source.set(file("src/main/res/xml/shortcuts.xml"))
         suffix.set(sideSuffix)
+        applicationId.set(appId)
         outputDir.set(layout.buildDirectory.dir("generated/side-res"))
     }
     // Generated resources sit above main's; only release builds may be side builds.
