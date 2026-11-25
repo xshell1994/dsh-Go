@@ -22441,6 +22441,7 @@ class L10nEn extends L10n {
 
   @override
   String get stateChatStopSteered => 'Couldn’t stop this turn. Sent as a steer.';
+
   @override
   String get stateChatSendRetired => 'This message didn’t go out. It’s back in the box.';
 
