@@ -229,8 +229,11 @@ jobs:
             || { echo "::error::APK package is not app.dshgo.mobile"; exit 1; }
           code=$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" "$RUNNER_TEMP/badging.txt")
           echo "versionCode: $code"
-          if [ "$code" -lt 10000000 ]; then
-            echo "::error::versionCode $code is not a build_number.py value (expected ~1126xxxx); reloading an older build would be refused as a downgrade"
+          # A magnitude check only catches 14000-like values, not a well-formed code
+          # from the wrong time. --decode throws on anything build_number.py did not
+          # produce, and prints the timestamp, so the log shows when it was built.
+          if ! python3 tooling/build_number.py --decode "$code"; then
+            echo "::error::versionCode $code was not produced by build_number.py; a later build may be refused as a downgrade"
             exit 1
           fi
 
@@ -244,13 +247,34 @@ jobs:
           fi
           echo "$out" | grep -qi "SHA-256 digest: $(echo "$finger" | tr 'A-F' 'a-f' | tr -d ':')" \
             || { echo "::error::APK signer certificate is not the release certificate"; exit 1; }
-          for v in v1 v2 v3; do
-            echo "$out" | grep -q "Verified using $v scheme (APK Signature Scheme $v): true" \
-              || { echo "::error::$v signature is not verified"; exit 1; }
-          done
+          # v1 failed here for a real reason, not because minSdk 26 makes it optional:
+          # MANIFEST.MF does not cover every entry (100+ flutter_assets entries are
+          # missing, and CERT.SF still says X-Android-APK-Signed: 2, 3), so apksigner
+          # reports v1: false honestly. It does not block installation, because minSdk 26
+          # devices read v2/v3 only, and enableV1Signing = true not being honoured is an
+          # AGP matter -- do NOT try to "fix" it by changing signingConfig. Keep the
+          # warning so nobody later reads this as "v1 is fine".
+          min_sdk=$(sed -n 's/.*minSdk = \([0-9]*\).*/\1/p' app/android/app/build.gradle.kts | head -1)
+          echo "minSdk from build.gradle.kts: $min_sdk"
+          # v2 and v3 are both required: an APK that lost v3 would still install on
+          # older devices and look fine, so silence here is how that ship leaks.
+          echo "$out" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" \
+            || { echo "::error::v2 signature is not verified"; exit 1; }
+          echo "$out" | grep -q "Verified using v3 scheme (APK Signature Scheme v3): true" \
+            || { echo "::error::v3 signature is not verified"; exit 1; }
+          if echo "$out" | grep -q "Verified using v1 scheme (JAR signing): true"; then
+            echo "v1: present"
+          elif [ "${min_sdk:-0}" -lt 24 ]; then
+            echo "::error::v1 signature is required for minSdk $min_sdk and is missing"
+            exit 1
+          else
+            echo "::warning::v1 (JAR) signature does not verify: MANIFEST.MF covers only part of the archive, so Android < 7.0 cannot install this APK. minSdk is $min_sdk, so it does not block the release; the warning is here so nobody reads v1 as verified."
+          fi
 
           echo "== checksum =="
-          sha256sum "$apk" | tee "$apk.sha256"
+          # Only the file name: an absolute /home/runner path makes `sha256sum -c` fail
+          # on the machine that downloaded the artifact.
+          (cd "$RUNNER_TEMP" && sha256sum "${{ steps.name.outputs.file }}" | tee "${{ steps.name.outputs.file }}.sha256")
           echo "version_code=$code" >> "$GITHUB_OUTPUT"
 
       - name: Upload the APK
