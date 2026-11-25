@@ -1492,7 +1492,16 @@ class ChatController extends Notifier<ChatState> {
     if (!ref.mounted) return false;
     if (_pending.any((p) => p.requestId == requestId)) {
       _pending = List.unmodifiable(_pending.where((p) => p.requestId != requestId));
-      state = state.copyWith(pending: _placePending());
+      // The bubble goes and the screen hands the text back; without this the
+      // person is left with a message that vanished and no word about it. Said
+      // once, here: every retirement path ends at this one write.
+      //
+      // This covers the case that matters, the person still on this
+      // conversation. Having moved away before the send retired, the controller
+      // is already disposed and the guard above returns first: the text is
+      // waiting in that conversation's draft, and no notice is owed on a screen
+      // that is no longer here.
+      state = state.copyWith(pending: _placePending(), notice: appL10n.stateChatSendRetired);
     }
     return false;
   }

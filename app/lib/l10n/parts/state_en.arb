@@ -114,6 +114,7 @@
   "stateCommandMissing": "Command not found",
   "stateCommandFailed": "Command didn’t run",
   "stateChatStopSteered": "Couldn’t stop this turn. Sent as a steer.",
+  "stateChatSendRetired": "This message didn’t go out. It’s back in the box.",
   "stateChatTextOnlyModel": "Sent as files: this model doesn’t list image input. Switch models or set its Input to Text + image.",
   "stateAttachmentUploadFailed": "Couldn’t upload attachment",
   "stateChatImageModelRequired": "This model doesn’t list image input. Switch models or set its Input to Text + image and resend.",

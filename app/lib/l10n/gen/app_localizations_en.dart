@@ -22443,6 +22443,9 @@ class L10nEn extends L10n {
   String get stateChatStopSteered => 'Couldn’t stop this turn. Sent as a steer.';
 
   @override
+  String get stateChatSendRetired => 'This message didn’t go out. It’s back in the box.';
+
+  @override
   String get stateChatTextOnlyModel =>
       'Sent as files: this model doesn’t list image input. Switch models or set its Input to Text + image.';
 

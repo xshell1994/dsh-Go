@@ -114,6 +114,7 @@
   "stateCommandMissing": "没有这个指令",
   "stateCommandFailed": "指令没有执行",
   "stateChatStopSteered": "没能停下本轮，已作为插话发送",
+  "stateChatSendRetired": "这条没发出去，已放回输入框",
   "stateChatTextOnlyModel": "当前模型未声明支持图片，已按文件发送。可换模型，或把自定义模型的输入类型设为「文本和图片」",
   "stateAttachmentUploadFailed": "附件上传失败",
   "stateChatImageModelRequired": "当前模型未声明支持图片。请换模型，或把自定义模型的输入类型设为「文本和图片」再发",
