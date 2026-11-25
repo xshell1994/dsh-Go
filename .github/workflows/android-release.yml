@@ -68,6 +68,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
         with:
           gradle-version: ${{ env.GRADLE_VERSION }}
+          # Without this the action only writes its cache on the default branch, so a
+          # build on a feature branch starts from an empty cache every time and resolves
+          # all ~300 artifacts again -- one slow mirror or one 429 then fails the run.
+          cache-read-only: false
 
       # The runtime's downloads are hashed on every run, so a stale cache is harmless.
       - name: Restore the runtime download cache
@@ -78,21 +82,47 @@ jobs:
           key: runtime-downloads-v1-${{ hashFiles('runtime/build-runtime.sh', 'runtime/locks/**') }}
           restore-keys: runtime-downloads-v1-
 
-      - name: Gradle wrapper
-        working-directory: app/android
-        run: gradle wrapper --gradle-version "$GRADLE_VERSION"
-
-      - name: Flutter dependencies and local.properties
+      # app/android/settings.gradle.kts reads flutter.sdk from local.properties while it
+      # resolves plugins, so this must exist before ANY Gradle invocation below, the
+      # wrapper one included.
+      - name: Local properties
         working-directory: app
         run: |
-          flutter pub get --enforce-lockfile
           printf 'sdk.dir=%s\nflutter.sdk=%s\n' "$ANDROID_HOME" "$FLUTTER_ROOT" > android/local.properties
+          cat android/local.properties
+
+      - name: Gradle wrapper
+        working-directory: app/android
+        run: |
+          set -euo pipefail
+          # Every resolution still reaches a Maven host on a cold cache, and a shared
+          # runner IP does get 429/502 from time to time. Three attempts with a pause
+          # costs a minute on failure and needs no mirror that fights the toolchain.
+          for attempt in 1 2 3; do
+            if gradle wrapper --gradle-version "$GRADLE_VERSION"; then break; fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            echo "gradle wrapper failed (attempt $attempt), retrying in $((attempt * 30))s"
+            sleep $((attempt * 30))
+          done
+
+      - name: Flutter dependencies
+        working-directory: app
+        run: flutter pub get --enforce-lockfile
 
       - name: Install the pinned NDK (libtawcroot.so)
         run: |
+          set -euo pipefail
           ndk=$(python3 -c 'import json,sys; print(json.load(open("runtime/tawcroot/source.json"))["ndkVersion"])')
-          echo "$ANDROID_HOME/ndk/$ndk"
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
+          echo "runner ANDROID_NDK_HOME before: ${ANDROID_NDK_HOME:-<unset>}"
+          # No `yes |`: sdkmanager already has the licences, and under `pipefail` the
+          # SIGPIPE that `yes` takes when sdkmanager closes stdin fails the whole step
+          # ("yes: standard output: Broken pipe") even though the install succeeded.
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk" </dev/null
+          cat "$ANDROID_HOME/ndk/$ndk/source.properties" | grep Pkg.Revision || true
+          # runtime/tawcroot/build.py takes ANDROID_NDK_HOME over the SDK's ndk/, and the
+          # runner image's own value can point at a different revision: pin it to the one
+          # the build just installed, and say which it was.
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
 
       - name: Build the bundled runtime (arm64)
         run: runtime/build-runtime.sh arm64-v8a
@@ -124,23 +154,49 @@ jobs:
           keydir="$RUNNER_TEMP/keys"
           mkdir -p "$keydir"
           printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$keydir/release.jks"
+          chmod 600 "$keydir/release.jks"
+          # Prove the key is usable here, not 20 minutes later inside Gradle: a wrong
+          # password, a truncated base64 paste or the wrong alias all pass the checks
+          # above and only fail the APK step. The store type is read from the bytes,
+          # because keytool's modern default is PKCS#12 whatever the file is called.
+          store_type=$(python3 -c "import sys; h = open(sys.argv[1], 'rb').read(8); print('pkcs12' if len(h) >= 8 and h[0] == 0x30 and h[1] == 0x82 and h[4] == 2 and h[5] == 1 and h[6] == 3 else 'jks')" "$keydir/release.jks")
+          echo "keystore type: $store_type"
+          keytool -list -v -keystore "$keydir/release.jks" -storetype "$store_type" \
+            -storepass "$STORE_PASSWORD" -alias "$KEY_ALIAS" | tee "$RUNNER_TEMP/key-info.txt" > /dev/null
+          # The certificate fingerprint is what an update is checked against, and it is
+          # public (it ships inside every APK). Print it so a release can be compared with
+          # the offline backup: the same fingerprint means this key can update builds made
+          # with that backup.
+          echo "### Signing certificate"
+          grep -i 'SHA256:' "$RUNNER_TEMP/key-info.txt" || {
+            echo "::error::keytool printed no SHA256 fingerprint for alias $KEY_ALIAS"
+            exit 1
+          }
           # key.properties is gitignored; build.gradle.kts reads it from the root project.
           {
             echo "storeFile=$keydir/release.jks"
+            echo "storeType=$store_type"
             echo "storePassword=$STORE_PASSWORD"
             echo "keyAlias=$KEY_ALIAS"
             echo "keyPassword=$KEY_PASSWORD"
           } > app/android/key.properties
-          chmod 600 app/android/key.properties "$keydir/release.jks"
+          chmod 600 app/android/key.properties
 
       - name: Build the release APK
         run: |
+          set -euo pipefail
           extra=(--no-companion)
           if [[ "${{ inputs.companion }}" == "true" ]]; then extra=(); fi
           args=("${extra[@]}")
           if [[ -n "${{ inputs.build_name }}" ]]; then args+=(--build-name "${{ inputs.build_name }}"); fi
           if [[ -n "${{ inputs.build_number }}" ]]; then args+=(--build-number "${{ inputs.build_number }}"); fi
-          tooling/build-apk.sh "${args[@]}"
+          # Same retry as the wrapper step: a cold cache can still meet a 429/502.
+          for attempt in 1 2 3; do
+            if tooling/build-apk.sh "${args[@]}"; then exit 0; fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            echo "release build failed (attempt $attempt), retrying in $((attempt * 30))s"
+            sleep $((attempt * 30))
+          done
 
       - name: Name the artifact
         id: name
@@ -152,10 +208,57 @@ jobs:
           cp "$apk" "$RUNNER_TEMP/dsh-go-$version-arm64.apk"
           echo "file=dsh-go-$version-arm64.apk" >> "$GITHUB_OUTPUT"
 
+      # The checking machines have no aapt2/apksigner; the runner does. Prove the
+      # artifact here, so the log and the .sha256 next to the APK are the evidence.
+      # The fingerprint printed now is read from the APK itself, not the keystore.
+      - name: Verify the signed APK
+        id: verify
+        run: |
+          set -euo pipefail
+          apk="$RUNNER_TEMP/${{ steps.name.outputs.file }}"
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
+          echo "using ${bt}"
+
+          echo "== badging =="
+          "${bt}aapt2" dump badging "$apk" | tee "$RUNNER_TEMP/badging.txt" | grep -E '^package:|^sdkVersion:|^targetSdkVersion:'
+
+          # The two values that were wrong in every wrong build: the install identity
+          # and the version code. A release that carries another name or the debug
+          # version code must not reach the artifact list.
+          grep -q "package: name='app.dshgo.mobile'" "$RUNNER_TEMP/badging.txt" \
+            || { echo "::error::APK package is not app.dshgo.mobile"; exit 1; }
+          code=$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" "$RUNNER_TEMP/badging.txt")
+          echo "versionCode: $code"
+          if [ "$code" -lt 10000000 ]; then
+            echo "::error::versionCode $code is not a build_number.py value (expected ~1126xxxx); reloading an older build would be refused as a downgrade"
+            exit 1
+          fi
+
+          echo "== certs =="
+          finger=00:E7:F5:B1:06:F3:5A:4A:79:61:6D:4C:E6:14:EF:2E:D8:2F:DF:BD:95:8A:4A:76:D3:90:7F:F1:8C:B4:54:06
+          out=$("${bt}apksigner" verify -v --print-certs "$apk" 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          if echo "$out" | grep -q "CN=Android Debug"; then
+            echo "::error::APK is debug-signed"
+            exit 1
+          fi
+          echo "$out" | grep -qi "SHA-256 digest: $(echo "$finger" | tr 'A-F' 'a-f' | tr -d ':')" \
+            || { echo "::error::APK signer certificate is not the release certificate"; exit 1; }
+          for v in v1 v2 v3; do
+            echo "$out" | grep -q "Verified using $v scheme (APK Signature Scheme $v): true" \
+              || { echo "::error::$v signature is not verified"; exit 1; }
+          done
+
+          echo "== checksum =="
+          sha256sum "$apk" | tee "$apk.sha256"
+          echo "version_code=$code" >> "$GITHUB_OUTPUT"
+
       - name: Upload the APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.name.outputs.file }}
-          path: ${{ runner.temp }}/${{ steps.name.outputs.file }}
+          path: |
+            ${{ runner.temp }}/${{ steps.name.outputs.file }}
+            ${{ runner.temp }}/${{ steps.name.outputs.file }}.sha256
           if-no-files-found: error
           retention-days: 30

@@ -119,7 +119,7 @@ class AppUpdateState {
 
   /// HarmonyOS checks the feed and offers a release page, never an APK.
   final bool noticeOnly;
-  bool get checkable => installable || noticeOnly;
+  bool get checkable => updatesEnabled && (installable || noticeOnly);
 
   /// The notice can open only a real web page, without embedded credentials.
   /// A newer feed version alone does not establish an OH installable artifact.

@@ -28,17 +28,18 @@ val sideSuffix = ".test"
 abstract class SideShortcuts : DefaultTask() {
     @get:InputFile abstract val source: RegularFileProperty
     @get:Input abstract val suffix: Property<String>
+    @get:Input abstract val applicationId: Property<String>
     @get:OutputDirectory abstract val outputDir: DirectoryProperty
 
     @TaskAction
     fun write() {
-        val main = "android:targetPackage=\"io.github.ccch1mneyyy.dsh_app\""
+        val main = "android:targetPackage=\"${applicationId.get()}\""
         val text = source.get().asFile.readText()
         check(main in text) { "shortcuts.xml no longer names the package as $main" }
         val out = outputDir.get().asFile.resolve("xml")
         out.mkdirs()
         out.resolve("shortcuts.xml").writeText(
-            text.replace(main, "android:targetPackage=\"io.github.ccch1mneyyy.dsh_app${suffix.get()}\""))
+            text.replace(main, "android:targetPackage=\"${applicationId.get()}${suffix.get()}\""))
     }
 }
 
@@ -57,6 +58,23 @@ fun buildMinuteVersionCode(): Int {
     return (t.year - 2026) * 100_000_000 + t.monthValue * 1_000_000 + t.dayOfMonth * 10_000 + t.hour * 100 + t.minute
 }
 
+/// Whether [key] holds a PKCS#12 container rather than a JKS one: both are DER, but a
+/// PKCS#12 file's outer SEQUENCE holds the INTEGER version 3 where JKS has 0xFEEDFEED.
+/// Gradle's default is JKS, so a PKCS#12 store named .jks fails to load without this.
+fun pkcs12Probe(key: java.io.File): String {
+    val head = ByteArray(8)
+    val read = key.inputStream().use { it.read(head) }
+    val pkcs12 = read >= 8 &&
+        head[0] == 0x30.toByte() && head[1] == 0x82.toByte() &&
+        head[4] == 0x02.toByte() && head[5] == 0x01.toByte() && head[6] == 0x03.toByte()
+    return if (pkcs12) "pkcs12" else "jks"
+}
+
+// The install identity: what Android uses for the data directory, permissions and
+// update compatibility. Deliberately not the namespace below (that stays the Kotlin
+// class package); keep this free of any personal account handle.
+val appId = "app.dshgo.mobile"
+
 android {
     namespace = "io.github.ccch1mneyyy.dsh_app"
     compileSdk = flutter.compileSdkVersion
@@ -72,7 +90,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "io.github.ccch1mneyyy.dsh_app"
+        applicationId = appId
         if (sideBuild) applicationIdSuffix = sideSuffix
         manifestPlaceholders["appLabel"] = if (sideBuild) "DSH Go 测试" else "DSH Go"
         // java.nio.file (symlinks while unpacking the rootfs) needs API 26.
@@ -131,6 +149,12 @@ android {
         )
     }
 
+    // APPLICATION_ID is how the runtime reads its own install identity instead of
+    // a literal package name (diagnostics/SystemImeEvidence.kt, phone/SafetyGate.kt).
+    buildFeatures {
+        buildConfig = true
+    }
+
     lint {
         // targetSdk 28 is deliberate (see docs/architecture.md); not a Play build.
         disable += "ExpiredTargetSdkVersion"
@@ -144,6 +168,15 @@ android {
         if (!keyProps.isEmpty) {
             create("release") {
                 storeFile = keyProps.getProperty("storeFile")?.let { file(it) }
+                // PKCS#12 keystores are common from keytool's modern default, and the file
+                // extension does not say which it is: take the type from key.properties and
+                // fall back to the format's own first bytes.
+                storeType = keyProps.getProperty("storeType")
+                    ?: keyProps.getProperty("storeFile")
+                        ?.let { file(it) }
+                        ?.takeIf { it.exists() }
+                        ?.let { pkcs12Probe(it) }
+                    ?: "jks"
                 storePassword = keyProps.getProperty("storePassword")
                 keyAlias = keyProps.getProperty("keyAlias")
                 keyPassword = keyProps.getProperty("keyPassword")
@@ -216,6 +249,7 @@ if (sideBuild) {
     val sideShortcuts = tasks.register<SideShortcuts>("sideShortcuts") {
         source.set(file("src/main/res/xml/shortcuts.xml"))
         suffix.set(sideSuffix)
+        applicationId.set(appId)
         outputDir.set(layout.buildDirectory.dir("generated/side-res"))
     }
     // Generated resources sit above main's; only release builds may be side builds.
