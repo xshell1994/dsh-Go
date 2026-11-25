@@ -907,15 +907,22 @@ class RoomChatState {
   );
 }
 
-/// Puts a fresh newest page over what is shown: everything before its first
-/// item stays (earlier pages), the page replaces the rest. A page that shares
-/// nothing with what is shown replaces it all.
-({List<DsBotItem> items, bool joined}) mergeNewestPage(List<DsBotItem> shown, List<DsBotItem> page) {
-  if (page.isEmpty) return (items: shown.isEmpty ? page : shown, joined: shown.isNotEmpty);
-  final first = page.first;
-  final at = shown.indexWhere((item) => item.sameAs(first));
-  if (at < 0) return (items: page, joined: false);
-  return (items: [...shown.take(at), ...page], joined: true);
+/// Puts a fresh newest page over what is shown: everything before the line the
+/// two share stays (earlier pages), the page takes over from there. A page that
+/// shares nothing with what is shown is all newer, so it only adds.
+List<DsBotItem> mergeNewestPage(List<DsBotItem> shown, List<DsBotItem> page) {
+  if (page.isEmpty) return shown.isEmpty ? page : shown;
+  // Any line of the page may be one still on screen: a round adds rows in the
+  // middle of it, and its first row can be one the feed named differently. Find
+  // the overlap wherever it is. Without one the page is all newer, so it adds.
+  var at = -1;
+  var inPage = 0;
+  for (var i = 0; i < page.length && at < 0; i++) {
+    at = shown.indexWhere((item) => item.sameAs(page[i]));
+    inPage = i;
+  }
+  if (at < 0) return [...shown, ...page];
+  return [...shown.take(at), ...page.skip(inPage)];
 }
 
 /// Pages from `room-chat`; the feed's `room` event (a new line, a round
@@ -991,10 +998,11 @@ class RoomChatController extends Notifier<RoomChatState> {
     try {
       final page = await api.roomChat(roomId);
       if (!_current(generation) || load != _load) return;
-      final merged = mergeNewestPage(state.items, page.items);
       state = state.copyWith(
-        items: merged.items,
-        cursor: merged.joined && state.items.isNotEmpty ? null : () => page.cursor,
+        items: mergeNewestPage(state.items, page.items),
+        // A page read again must not open the older ones afresh: an earlier
+        // cursor already loaded further back than this page's own.
+        cursor: () => state.cursor ?? page.cursor,
         loading: false,
         running: page.running,
         speaking: () => page.speaking,
