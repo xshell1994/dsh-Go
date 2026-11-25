@@ -82,55 +82,6 @@ jobs:
           key: runtime-downloads-v1-${{ hashFiles('runtime/build-runtime.sh', 'runtime/locks/**') }}
           restore-keys: runtime-downloads-v1-
 
-      # Maven Central answers 429 to a shared runner IP often enough that the same commit
-      # failed three times in the Flutter toolchain's own buildscript (project ':gradle',
-      # from includeBuild). That buildscript declares google()/mavenCentral() itself and
-      # never sees app/android/settings.gradle.kts, so mirrors there cannot help. An init
-      # script runs before every build, included ones too, and puts the mirrors in front of
-      # whatever each build declared. gradlePluginPortal() is the real source: it answers
-      # 302 to repo.maven.apache.org, which is the host that rate-limits us.
-      - name: Maven mirrors for every build
-        run: |
-          set -euo pipefail
-          mkdir -p ~/.gradle/init.d
-          cat > ~/.gradle/init.d/maven-mirrors.gradle <<'EOF'
-          // Only the Central-shaped mirrors. The Google mirror answers 404 to Central
-          // artifacts (and has answered 502), so putting it in front of a Central
-          // resolution costs a request per artifact and can fail the whole resolution.
-          // Google's own artifacts are left to the google() repository each build declares.
-          def mirrors = [
-              'https://maven.aliyun.com/repository/gradle-plugin',
-              'https://maven.aliyun.com/repository/central',
-              'https://maven.aliyun.com/repository/public',
-          ]
-          def normalize = { u -> u.toString().replaceAll('/+$', '') }
-          def prepend = { repos ->
-              def existing = repos.toList()
-              // Gradle adds these hooks more than once (and settings.gradle.kts already
-              // lists the same mirrors): without this the list grows a duplicate set per
-              // hook, and every resolution pays for the dead entries.
-              def have = existing.findAll { it.hasProperty('url') }.collect { normalize(it.url) }
-              def add = mirrors.findAll { m -> !have.contains(normalize(m)) }
-              if (add.isEmpty()) return
-              repos.clear()
-              add.each { u -> repos.maven { url = u } }
-              existing.each { r -> repos.add(r) }
-          }
-          // pluginManagement gets the mirrors for every build; beforeProject covers the
-          // project-level buildscript, which is where the Flutter toolchain's included
-          // build resolves its plugins. NOT dependencyResolutionManagement: adding a
-          // repository there switches dependency resolution to the settings level and
-          // collides with that build's RepositoriesMode.PREFER_SETTINGS.
-          settingsEvaluated { settings ->
-              prepend(settings.pluginManagement.repositories)
-          }
-          gradle.beforeProject { p ->
-              prepend(p.buildscript.repositories)
-              prepend(p.repositories)
-          }
-          EOF
-          cat ~/.gradle/init.d/maven-mirrors.gradle
-
       # app/android/settings.gradle.kts reads flutter.sdk from local.properties while it
       # resolves plugins, so this must exist before ANY Gradle invocation below, the
       # wrapper one included.
