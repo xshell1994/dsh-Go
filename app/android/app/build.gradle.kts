@@ -58,6 +58,18 @@ fun buildMinuteVersionCode(): Int {
     return (t.year - 2026) * 100_000_000 + t.monthValue * 1_000_000 + t.dayOfMonth * 10_000 + t.hour * 100 + t.minute
 }
 
+/// Whether [key] holds a PKCS#12 container rather than a JKS one: both are DER, but a
+/// PKCS#12 file's outer SEQUENCE holds the INTEGER version 3 where JKS has 0xFEEDFEED.
+/// Gradle's default is JKS, so a PKCS#12 store named .jks fails to load without this.
+fun pkcs12Probe(key: java.io.File): String {
+    val head = ByteArray(8)
+    val read = key.inputStream().use { it.read(head) }
+    val pkcs12 = read >= 8 &&
+        head[0] == 0x30.toByte() && head[1] == 0x82.toByte() &&
+        head[4] == 0x02.toByte() && head[5] == 0x01.toByte() && head[6] == 0x03.toByte()
+    return if (pkcs12) "pkcs12" else "jks"
+}
+
 // The install identity: what Android uses for the data directory, permissions and
 // update compatibility. Deliberately not the namespace below (that stays the Kotlin
 // class package); keep this free of any personal account handle.
@@ -156,6 +168,15 @@ android {
         if (!keyProps.isEmpty) {
             create("release") {
                 storeFile = keyProps.getProperty("storeFile")?.let { file(it) }
+                // PKCS#12 keystores are common from keytool's modern default, and the file
+                // extension does not say which it is: take the type from key.properties and
+                // fall back to the format's own first bytes.
+                storeType = keyProps.getProperty("storeType")
+                    ?: keyProps.getProperty("storeFile")
+                        ?.let { file(it) }
+                        ?.takeIf { it.exists() }
+                        ?.let { pkcs12Probe(it) }
+                    ?: "jks"
                 storePassword = keyProps.getProperty("storePassword")
                 keyAlias = keyProps.getProperty("keyAlias")
                 keyPassword = keyProps.getProperty("keyPassword")
