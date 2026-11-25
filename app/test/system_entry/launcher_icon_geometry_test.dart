@@ -26,6 +26,17 @@ String _constant(String source, String name) {
   return m!.group(1)!.trim().replaceAll('"', '');
 }
 
+/// `val NAME = "<value>"` at the start of a line in the app's Gradle script.
+///
+/// Anchored to the line, so a mention inside a comment or after a dot cannot be
+/// taken for the declaration itself; `firstMatch` would read it otherwise.
+///
+/// Null when absent, never a throw: a bundle runs this file's setup inside a
+/// group, where only a test body may assert. Asserting here would take every
+/// test in the file down for one missing name.
+String? _declared(String source, String name) =>
+    RegExp('(?:^|\n)[ \t]*${RegExp.escape(name)} = "([^"]+)"').firstMatch(source)?.group(1);
+
 /// `1L * 1024 * 1024` style Kotlin constants.
 int _bytes(String expression) =>
     expression.replaceAll('L', '').split('*').map((p) => int.parse(p.trim())).reduce((a, b) => a * b);
@@ -94,7 +105,11 @@ void main() {
     final xml = readRes('xml/shortcuts.xml');
     final entry = _source('shortcuts/EntryActivity.kt');
     final gradle = File('android/app/build.gradle.kts').readAsStringSync();
-    final applicationId = RegExp(r'applicationId = "([^"]+)"').firstMatch(gradle)!.group(1)!;
+    // The id lives in `val appId`, which `applicationId = appId` and the
+    // shortcuts plugin both read; the namespace is a separate value, kept on the
+    // old package because it names the Kotlin classes.
+    final applicationId = _declared(gradle, 'val appId');
+    final namespace = _declared(gradle, 'namespace');
     final strings = readRes('values-zh/entry_strings.xml');
 
     final shortcuts = RegExp(r'<shortcut\b([\s\S]*?)</shortcut>').allMatches(xml).map((m) => m.group(1)!).toList();
@@ -125,9 +140,13 @@ void main() {
         [for (final s in shortcuts) attr(s, 'action')],
         [_constant(entry, 'ACTION_NEW_CHAT'), _constant(entry, 'ACTION_VOICE')],
       );
+      expect(applicationId, isNotNull, reason: 'gradle declares no val appId');
+      expect(namespace, isNotNull, reason: 'gradle declares no namespace');
       for (final s in shortcuts) {
+        // What the system launches is the applicationId; what it starts is a
+        // Kotlin class, so the class name follows the namespace instead.
         expect(attr(s, 'targetPackage'), applicationId);
-        expect(attr(s, 'targetClass'), '$applicationId.shortcuts.EntryActivity');
+        expect(attr(s, 'targetClass'), '$namespace.shortcuts.EntryActivity');
       }
     });
   });
