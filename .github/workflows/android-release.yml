@@ -208,10 +208,57 @@ jobs:
           cp "$apk" "$RUNNER_TEMP/dsh-go-$version-arm64.apk"
           echo "file=dsh-go-$version-arm64.apk" >> "$GITHUB_OUTPUT"
 
+      # The checking machines have no aapt2/apksigner; the runner does. Prove the
+      # artifact here, so the log and the .sha256 next to the APK are the evidence.
+      # The fingerprint printed now is read from the APK itself, not the keystore.
+      - name: Verify the signed APK
+        id: verify
+        run: |
+          set -euo pipefail
+          apk="$RUNNER_TEMP/${{ steps.name.outputs.file }}"
+          bt=$(ls -d "$ANDROID_HOME"/build-tools/*/ | sort -V | tail -1)
+          echo "using ${bt}"
+
+          echo "== badging =="
+          "${bt}aapt2" dump badging "$apk" | tee "$RUNNER_TEMP/badging.txt" | grep -E '^package:|^sdkVersion:|^targetSdkVersion:'
+
+          # The two values that were wrong in every wrong build: the install identity
+          # and the version code. A release that carries another name or the debug
+          # version code must not reach the artifact list.
+          grep -q "package: name='app.dshgo.mobile'" "$RUNNER_TEMP/badging.txt" \
+            || { echo "::error::APK package is not app.dshgo.mobile"; exit 1; }
+          code=$(sed -n "s/.*versionCode='\([0-9]*\)'.*/\1/p" "$RUNNER_TEMP/badging.txt")
+          echo "versionCode: $code"
+          if [ "$code" -lt 10000000 ]; then
+            echo "::error::versionCode $code is not a build_number.py value (expected ~1126xxxx); reloading an older build would be refused as a downgrade"
+            exit 1
+          fi
+
+          echo "== certs =="
+          finger=00:E7:F5:B1:06:F3:5A:4A:79:61:6D:4C:E6:14:EF:2E:D8:2F:DF:BD:95:8A:4A:76:D3:90:7F:F1:8C:B4:54:06
+          out=$("${bt}apksigner" verify -v --print-certs "$apk" 2>&1) || { echo "$out"; exit 1; }
+          echo "$out"
+          if echo "$out" | grep -q "CN=Android Debug"; then
+            echo "::error::APK is debug-signed"
+            exit 1
+          fi
+          echo "$out" | grep -qi "SHA-256 digest: $(echo "$finger" | tr 'A-F' 'a-f' | tr -d ':')" \
+            || { echo "::error::APK signer certificate is not the release certificate"; exit 1; }
+          for v in v1 v2 v3; do
+            echo "$out" | grep -q "Verified using $v scheme (APK Signature Scheme $v): true" \
+              || { echo "::error::$v signature is not verified"; exit 1; }
+          done
+
+          echo "== checksum =="
+          sha256sum "$apk" | tee "$apk.sha256"
+          echo "version_code=$code" >> "$GITHUB_OUTPUT"
+
       - name: Upload the APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: ${{ steps.name.outputs.file }}
-          path: ${{ runner.temp }}/${{ steps.name.outputs.file }}
+          path: |
+            ${{ runner.temp }}/${{ steps.name.outputs.file }}
+            ${{ runner.temp }}/${{ steps.name.outputs.file }}.sha256
           if-no-files-found: error
           retention-days: 30
