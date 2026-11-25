@@ -362,12 +362,12 @@ void main() {
   group('helpers', () {
     DsBotItem item(String id, [String text = '']) => DsBotItem(kind: DsBotItemKind.bot, id: id, text: text, botId: 'b');
 
-    test('mergeNewestPage keeps earlier pages and replaces from the page\'s first item', () {
+    test('mergeNewestPage keeps earlier pages and takes over from the line they share', () {
       final shown = [item('a'), item('b'), item('c', 'live')];
       final merged = mergeNewestPage(shown, [item('b'), item('c', 'final'), item('d')]);
-      expect(merged.joined, isTrue);
-      expect(merged.items.map((i) => '${i.id}${i.text}'), ['a', 'b', 'cfinal', 'd']);
-      expect(mergeNewestPage(shown, [item('x')]).items.map((i) => i.id), ['x']);
+      expect(merged.map((i) => '${i.id}${i.text}'), ['a', 'b', 'cfinal', 'd']);
+      // A page that shares nothing is all newer: it adds, it does not replace.
+      expect(mergeNewestPage(shown, [item('x')]).map((i) => i.id), ['a', 'b', 'c', 'x']);
     });
 
     test('settlePending drops each echoed message once', () {
