@@ -97,9 +97,15 @@ jobs:
 
       - name: Install the pinned NDK (libtawcroot.so)
         run: |
+          set -euo pipefail
           ndk=$(python3 -c 'import json,sys; print(json.load(open("runtime/tawcroot/source.json"))["ndkVersion"])')
-          echo "$ANDROID_HOME/ndk/$ndk"
+          echo "runner ANDROID_NDK_HOME before: ${ANDROID_NDK_HOME:-<unset>}"
           yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
+          cat "$ANDROID_HOME/ndk/$ndk/source.properties" | grep Pkg.Revision || true
+          # runtime/tawcroot/build.py takes ANDROID_NDK_HOME over the SDK's ndk/, and the
+          # runner image's own value can point at a different revision: pin it to the one
+          # the build just installed, and say which it was.
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ndk" >> "$GITHUB_ENV"
 
       - name: Build the bundled runtime (arm64)
         run: runtime/build-runtime.sh arm64-v8a
