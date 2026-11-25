@@ -93,7 +93,17 @@ jobs:
 
       - name: Gradle wrapper
         working-directory: app/android
-        run: gradle wrapper --gradle-version "$GRADLE_VERSION"
+        run: |
+          set -euo pipefail
+          # Every resolution still reaches a Maven host on a cold cache, and a shared
+          # runner IP does get 429/502 from time to time. Three attempts with a pause
+          # costs a minute on failure and needs no mirror that fights the toolchain.
+          for attempt in 1 2 3; do
+            if gradle wrapper --gradle-version "$GRADLE_VERSION"; then break; fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            echo "gradle wrapper failed (attempt $attempt), retrying in $((attempt * 30))s"
+            sleep $((attempt * 30))
+          done
 
       - name: Flutter dependencies
         working-directory: app
@@ -171,12 +181,19 @@ jobs:
 
       - name: Build the release APK
         run: |
+          set -euo pipefail
           extra=(--no-companion)
           if [[ "${{ inputs.companion }}" == "true" ]]; then extra=(); fi
           args=("${extra[@]}")
           if [[ -n "${{ inputs.build_name }}" ]]; then args+=(--build-name "${{ inputs.build_name }}"); fi
           if [[ -n "${{ inputs.build_number }}" ]]; then args+=(--build-number "${{ inputs.build_number }}"); fi
-          tooling/build-apk.sh "${args[@]}"
+          # Same retry as the wrapper step: a cold cache can still meet a 429/502.
+          for attempt in 1 2 3; do
+            if tooling/build-apk.sh "${args[@]}"; then exit 0; fi
+            if [ "$attempt" = 3 ]; then exit 1; fi
+            echo "release build failed (attempt $attempt), retrying in $((attempt * 30))s"
+            sleep $((attempt * 30))
+          done
 
       - name: Name the artifact
         id: name
