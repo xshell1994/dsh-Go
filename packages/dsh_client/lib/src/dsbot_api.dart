@@ -870,9 +870,46 @@ class DsBotItem {
 
   factory DsBotItem.fromJson(Object? json) {
     final map = asMapOrEmpty(json);
+    final rawKind = asString(map['kind']);
+    // A Bot's own chat can hold a group's rows: a member's `post` reads as a
+    // message (its text may be several `texts`, or a file when it was too long
+    // for one), a round's `relay` row as its event, or as a message when it
+    // carries no event of its own. `room-chat` folds these already; only `chat`
+    // sends them as they are.
+    if (rawKind == 'post' || rawKind == 'relay') {
+      final reply = asMapOrEmpty(map['reply']);
+      final body = rawKind == 'post' ? map : reply;
+      final event = rawKind == 'post' ? null : asString(reply['kind']);
+      final texts = [
+        for (final text in asListOrEmpty(map['texts']))
+          if (text is String && text.isNotEmpty) text,
+      ];
+      final joined = texts.isEmpty ? asString(body['text']) ?? '' : texts.join('\n\n');
+      final file = asMap(map['file']);
+      final length = asInt(map['length']);
+      final duration = asInt(body['duration']);
+      return DsBotItem(
+        kind: switch (event) {
+          null || '' => DsBotItemKind.bot,
+          'user' => DsBotItemKind.user,
+          _ => DsBotItemKind.event,
+        },
+        id: asString(map['id']),
+        text: joined,
+        time: asEpochMs(map['time']) ?? asEpochMs(body['time']),
+        botId: asString(body['botId']),
+        name: asString(body['name']),
+        color: asString(body['color']),
+        event: event,
+        roomId: asString(body['roomId']),
+        duration: duration == null ? null : Duration(milliseconds: duration),
+        live: asBool(map['live']) ?? false,
+        whole: file == null || length == null ? null : DsBotLongText(length, file),
+      );
+    }
     final whole = asMap(map['whole']);
     return DsBotItem(
-      kind: switch (asString(map['kind'])) {
+      kind: switch (rawKind) {
         'user' => DsBotItemKind.user,
         'bot' => DsBotItemKind.bot,
         'event' => DsBotItemKind.event,
