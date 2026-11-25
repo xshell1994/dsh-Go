@@ -21,8 +21,9 @@ class _HeldClient extends DshClient {
   final events = StreamController<DshEvent>.broadcast();
   Completer<String>? held;
 
-  void release() {
-    held?.complete('r');
+  /// Fails the in-flight prompt, the way a drop fails the request it carried.
+  void fail() {
+    held?.completeError(const DshTransportException('lost'));
     held = null;
   }
 
@@ -91,7 +92,7 @@ void main() {
     // drop the bubble without a word.
     client.events.add(const ConnectionStateEvent(DshConnectionState.reconnecting));
     await settle();
-    client.release();
+    client.fail();
     await sending;
     await settle();
 
