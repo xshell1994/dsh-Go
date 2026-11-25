@@ -114,7 +114,10 @@ jobs:
           set -euo pipefail
           ndk=$(python3 -c 'import json,sys; print(json.load(open("runtime/tawcroot/source.json"))["ndkVersion"])')
           echo "runner ANDROID_NDK_HOME before: ${ANDROID_NDK_HOME:-<unset>}"
-          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk"
+          # No `yes |`: sdkmanager already has the licences, and under `pipefail` the
+          # SIGPIPE that `yes` takes when sdkmanager closes stdin fails the whole step
+          # ("yes: standard output: Broken pipe") even though the install succeeded.
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ndk" </dev/null
           cat "$ANDROID_HOME/ndk/$ndk/source.properties" | grep Pkg.Revision || true
           # runtime/tawcroot/build.py takes ANDROID_NDK_HOME over the SDK's ndk/, and the
           # runner image's own value can point at a different revision: pin it to the one
