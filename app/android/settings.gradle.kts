@@ -12,12 +12,18 @@ pluginManagement {
 
     repositories {
         // Keep local mirror defaults; cloud CI can use the official upstreams.
+        // Order matters: the Central-shaped mirrors first, and the Google mirror only
+        // right before google(). The Google mirror answers 404 to Central artifacts (and
+        // has answered 502), so in front of them it costs a request per artifact and one
+        // bad answer can fail the whole resolution.
         if (System.getenv("DSH_MAVEN_MIRRORS") != "0") {
-            maven { url = uri("https://maven.aliyun.com/repository/google") }
             maven { url = uri("https://maven.aliyun.com/repository/central") }
             maven { url = uri("https://maven.aliyun.com/repository/gradle-plugin") }
         }
         google()
+        if (System.getenv("DSH_MAVEN_MIRRORS") != "0") {
+            maven { url = uri("https://maven.aliyun.com/repository/google") }
+        }
         mavenCentral()
         gradlePluginPortal()
     }
