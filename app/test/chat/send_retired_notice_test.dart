@@ -1,6 +1,6 @@
-// A send that the watch no longer owns (a reconnect moved the mux generation
-// on) hands its text back to the composer. It must say so: the bubble is gone
-// and the text came back, and without a word that reads as the message having
+// A send that the watch no longer owns — the connection dropped under it —
+// hands its text back to the composer. It must say so: the bubble is gone and
+// the text came back, and without a word that reads as the message having
 // vanished on its own.
 
 import 'dart:async';
@@ -13,15 +13,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-/// Records what [ChatController.send] delivers, and holds the prompt until the
-/// test lets it through, so the send is still in flight when the watch moves.
+/// Holds the prompt until the test lets it through, so the send is still in
+/// flight when the connection goes away.
 class _HeldClient extends DshClient {
   _HeldClient() : super(DshConnection(Uri.parse('http://127.0.0.1:9')));
 
   final events = StreamController<DshEvent>.broadcast();
-  final prompts = <String?>[];
-
-  /// Held while a send is in flight; completed by [release].
   Completer<String>? held;
 
   void release() {
@@ -42,7 +39,6 @@ class _HeldClient extends DshClient {
     PromptMode mode = PromptMode.queue,
     String? timeZone,
   }) async {
-    prompts.add(requestId);
     if (held case final held?) return held.future;
     return requestId ?? 'r';
   }
@@ -54,7 +50,7 @@ void main() {
 
   ChatController chat() => container.read(chatProvider('s1').notifier);
   ChatState state() => container.read(chatProvider('s1'));
-  Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 60));
+  Future<void> settle() => Future<void>.delayed(const Duration(milliseconds: 80));
 
   setUp(() async {
     SharedPreferences.setMockInitialValues({});
@@ -75,7 +71,8 @@ void main() {
         'projections': {'asOfSeq': -1, 'values': <String, Object?>{}},
       }),
     );
-    await container.pump();
+    await settle();
+    expect(state().controlReady, isTrue);
   });
 
   tearDown(() async {
@@ -89,9 +86,11 @@ void main() {
     await settle();
     expect(state().pending, hasLength(1), reason: 'the bubble waits while the send is in flight');
 
-    // The watch moves on: the mux generation changes under the in-flight send,
-    // which is what a reconnect does.
-    client.mux.reconnect();
+    // The connection drops while the send is still in flight. That retires the
+    // sync scope the send was started under, which is the path that used to
+    // drop the bubble without a word.
+    client.events.add(const ConnectionStateEvent(DshConnectionState.reconnecting));
+    await settle();
     client.release();
     await sending;
     await settle();
