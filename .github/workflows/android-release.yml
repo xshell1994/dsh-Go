@@ -103,23 +103,30 @@ jobs:
               'https://maven.aliyun.com/repository/central',
               'https://maven.aliyun.com/repository/public',
           ]
+          def normalize = { u -> u.toString().replaceAll('/+$', '') }
           def prepend = { repos ->
               def existing = repos.toList()
+              // Gradle adds these hooks more than once (and settings.gradle.kts already
+              // lists the same mirrors): without this the list grows a duplicate set per
+              // hook, and every resolution pays for the dead entries.
+              def have = existing.findAll { it.hasProperty('url') }.collect { normalize(it.url) }
+              def add = mirrors.findAll { m -> !have.contains(normalize(m)) }
+              if (add.isEmpty()) return
               repos.clear()
-              mirrors.each { u -> repos.maven { url = u } }
+              add.each { u -> repos.maven { url = u } }
               existing.each { r -> repos.add(r) }
+          }
+          // pluginManagement gets the mirrors for every build; beforeProject covers the
+          // project-level buildscript, which is where the Flutter toolchain's included
+          // build resolves its plugins. NOT dependencyResolutionManagement: adding a
+          // repository there switches dependency resolution to the settings level and
+          // collides with that build's RepositoriesMode.PREFER_SETTINGS.
+          settingsEvaluated { settings ->
+              prepend(settings.pluginManagement.repositories)
           }
           gradle.beforeProject { p ->
               prepend(p.buildscript.repositories)
               prepend(p.repositories)
-          }
-          allprojects { p ->
-              prepend(p.buildscript.repositories)
-              prepend(p.repositories)
-          }
-          settingsEvaluated { settings ->
-              prepend(settings.pluginManagement.repositories)
-              prepend(settings.dependencyResolutionManagement.repositories)
           }
           EOF
           cat ~/.gradle/init.d/maven-mirrors.gradle
