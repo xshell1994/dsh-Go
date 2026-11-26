@@ -398,6 +398,23 @@ void main() {
       expect(items, [false, true, false, false]);
     });
 
+    test('roomTranscriptRows folds a round\'s replies and says what a gap was', () {
+      final t0 = DateTime(2026, 10, 24, 9);
+      DsBotItem reply(String id, String text) =>
+          DsBotItem(kind: DsBotItemKind.bot, id: id, botId: 'a', text: text, time: t0);
+      final rows = roomTranscriptRows([
+        reply('r1:0', 'one'),
+        reply('r1:1', 'two'),
+        reply('r2:0', 'alone'),
+        DsBotItem(kind: DsBotItemKind.event, id: '7', event: 'missed', text: 'b', time: t0),
+      ]);
+      expect(rows.map((r) => r.runtimeType.toString()), ['BotRoundRow', 'BotItemRow', 'BotGapRow']);
+      expect(rows.whereType<BotRoundRow>().single.items.map((i) => i.text), ['one', 'two']);
+      // One reply is not a round worth folding.
+      expect(rows.whereType<BotItemRow>().single.item.text, 'alone');
+      expect(rows.whereType<BotGapRow>().single.item.event, 'missed');
+    });
+
     test('activeBotMention finds the @ word at the caret, not an address', () {
       TextEditingValue at(String text, [int? caret]) => TextEditingValue(
         text: text,

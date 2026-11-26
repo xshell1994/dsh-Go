@@ -351,6 +351,18 @@ final class BotStreamingRow extends BotRow {
   final String text;
 }
 
+/// One round's replies, folded into a single line until opened.
+final class BotRoundRow extends BotRow {
+  const BotRoundRow(this.items);
+  final List<DsBotItem> items;
+}
+
+/// A round said part of what it meant to: what did not arrive, said out loud.
+final class BotGapRow extends BotRow {
+  const BotGapRow(this.item);
+  final DsBotItem item;
+}
+
 final class BotTypingRow extends BotRow {
   const BotTypingRow(this.bot, this.label);
   final DsBot bot;
@@ -384,6 +396,53 @@ List<BotRow> transcriptRows(
     rows.add(BotPendingRow(entry));
   }
   if (streaming != null) rows.add(BotStreamingRow(streaming));
+  if (typing != null) rows.add(typing);
+  return rows;
+}
+
+/// Rows for a group chat. [transcriptRows], except that the replies of one
+/// round fold into a single row, and a reply that never came becomes a gap
+/// notice instead of an ordinary event line.
+///
+/// A round is the call the host logged its replies under: their ids carry it as
+/// the part before the `:`. Only a round with two or more replies folds; one
+/// reply reads better as itself.
+List<BotRow> roomTranscriptRows(
+  List<DsBotItem> items, {
+  List<DsBotPending> pending = const [],
+  BotTypingRow? typing,
+}) {
+  String? roundOf(DsBotItem item) {
+    final id = item.id;
+    if (item.kind != DsBotItemKind.bot || id == null) return null;
+    final colon = id.indexOf(':');
+    return colon <= 0 ? null : id.substring(0, colon);
+  }
+
+  final rows = <BotRow>[];
+  var index = 0;
+  while (index < items.length) {
+    final item = items[index];
+    final round = roundOf(item);
+    if (round != null) {
+      var end = index + 1;
+      while (end < items.length && roundOf(items[end]) == round) {
+        end++;
+      }
+      if (end - index > 1) {
+        rows.add(BotRoundRow(items.sublist(index, end)));
+        index = end;
+        continue;
+      }
+    }
+    // A reply that never came is the round admitting a gap: said once, in its
+    // own line, instead of passing as an ordinary event.
+    rows.add(item.kind == DsBotItemKind.event && item.event == 'missed' ? BotGapRow(item) : BotItemRow(item));
+    index++;
+  }
+  for (final entry in pending) {
+    rows.add(BotPendingRow(entry));
+  }
   if (typing != null) rows.add(typing);
   return rows;
 }
@@ -1256,3 +1315,143 @@ final cardButton = FilledButton.styleFrom(
   visualDensity: VisualDensity.compact,
   tapTargetSize: MaterialTapTargetSize.shrinkWrap,
 );
+
+/// One round's replies behind a single line: `本轮 N 条回复`. Opened, each
+/// reply reads as itself, the first with its face and name.
+class GroupRound extends StatefulWidget {
+  const GroupRound({super.key, required this.items, required this.itemBuilder});
+
+  final List<DsBotItem> items;
+
+  /// Draws one reply; [continued] is true for every reply after the first.
+  final Widget Function(BuildContext context, DsBotItem item, bool continued) itemBuilder;
+
+  @override
+  State<GroupRound> createState() => _GroupRoundState();
+}
+
+class _GroupRoundState extends State<GroupRound> {
+  bool _open = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final theme = Theme.of(context);
+    final dsh = DshColors.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        InkWell(
+          onTap: () => setState(() => _open = !_open),
+          borderRadius: BorderRadius.circular(10),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 4),
+            child: Row(
+              children: [
+                Icon(_open ? AppIcons.expand : AppIcons.disclosure, size: 16, color: dsh.textTertiary),
+                const SizedBox(width: 4),
+                Text(
+                  l10n.botsRoundReplies(widget.items.length),
+                  style: theme.textTheme.labelMedium?.copyWith(color: dsh.textTertiary),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_open)
+          for (var i = 0; i < widget.items.length; i++)
+            Padding(
+              padding: EdgeInsets.only(top: i == 0 ? 4 : 10),
+              child: widget.itemBuilder(context, widget.items[i], i > 0),
+            ),
+      ],
+    );
+  }
+}
+
+/// What a round meant to say and did not: a dashed line, and the reason behind
+/// it on request.
+class GroupGap extends StatefulWidget {
+  const GroupGap({super.key, required this.reason});
+
+  final String reason;
+
+  @override
+  State<GroupGap> createState() => _GroupGapState();
+}
+
+class _GroupGapState extends State<GroupGap> {
+  bool _why = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final l10n = context.l10n;
+    final theme = Theme.of(context);
+    final dsh = DshColors.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        CustomPaint(
+          painter: _DashedBox(theme.colorScheme.outlineVariant),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 8),
+            child: Row(
+              children: [
+                Icon(AppIcons.warning, size: 15, color: dsh.textTertiary),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    l10n.botsRoundMissing,
+                    style: theme.textTheme.bodySmall?.copyWith(color: dsh.textTertiary),
+                  ),
+                ),
+                TextButton(
+                  onPressed: () => setState(() => _why = !_why),
+                  style: TextButton.styleFrom(padding: EdgeInsets.zero, visualDensity: VisualDensity.compact),
+                  child: Text(l10n.commonDetails),
+                ),
+              ],
+            ),
+          ),
+        ),
+        if (_why)
+          Padding(
+            padding: const EdgeInsets.only(left: 10, top: 4),
+            child: Text(
+              widget.reason,
+              style: theme.textTheme.bodySmall?.copyWith(color: dsh.textTertiary),
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+/// A rectangle of dashes, the way the app draws a line that is not a fact.
+class _DashedBox extends CustomPainter {
+  const _DashedBox(this.color);
+
+  final Color color;
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = color
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 1;
+    const dash = 4.0;
+    const gap = 3.0;
+    final path = Path()
+      ..addRRect(RRect.fromRectAndRadius(Offset.zero & size, const Radius.circular(10)));
+    for (final metric in path.computeMetrics()) {
+      var at = 0.0;
+      while (at < metric.length) {
+        canvas.drawPath(metric.extractPath(at, math.min(at + dash, metric.length)), paint);
+        at += dash + gap;
+      }
+    }
+  }
+
+  @override
+  bool shouldRepaint(_DashedBox old) => old.color != color;
+}

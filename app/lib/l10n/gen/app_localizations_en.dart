@@ -2552,6 +2552,13 @@ class L10nEn extends L10n {
 
   @override
   String get botsGroupReplied => 'A reply in the group';
+  @override
+  String botsRoundReplies(int count) {
+    return 'This round: $count replies';
+  }
+
+  @override
+  String get botsRoundMissing => 'Part of this round didn’t arrive';
 
   @override
   String botsNamedGroupReplied(String name) {

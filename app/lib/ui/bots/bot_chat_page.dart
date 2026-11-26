@@ -174,6 +174,9 @@ class _BotChatPageState extends ConsumerState<BotChatPage> {
                     },
                   ),
                   BotTypingRow() => const SizedBox.shrink(),
+                  // A group chat's rows: folded rounds and gaps are built only
+                  // there, and a Bot's own chat never holds one.
+                  BotRoundRow() || BotGapRow() => const SizedBox.shrink(),
                   BotItemRow(:final item) => switch (item.kind) {
                     DsBotItemKind.user => BotUserMessage(text: item.text, images: item.images),
                     DsBotItemKind.bot => _WithCards(
