@@ -4489,6 +4489,17 @@ abstract class L10n {
   /// In zh, this message translates to:
   /// **'群里有了回复'**
   String get botsGroupReplied;
+  /// No description provided for @botsRoundReplies.
+  ///
+  /// In zh, this message translates to:
+  /// **'本轮 {count} 条回复'**
+  String botsRoundReplies(int count);
+
+  /// No description provided for @botsRoundMissing.
+  ///
+  /// In zh, this message translates to:
+  /// **'这一轮有内容没送达'**
+  String get botsRoundMissing;
 
   /// No description provided for @botsNamedGroupReplied.
   ///

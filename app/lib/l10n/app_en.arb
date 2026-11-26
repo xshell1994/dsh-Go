@@ -733,6 +733,8 @@
   "botsMessageFrom": "Message from {name}",
   "botsEventReplied": "{name} replied",
   "botsGroupReplied": "A reply in the group",
+  "botsRoundReplies": "This round: {count} replies",
+  "botsRoundMissing": "Part of this round didn’t arrive",
   "botsNamedGroupReplied": "A reply in “{name}”",
   "botsEventCalledStop": "{name} stopped the work",
   "botsChooseMember": "Choose member",

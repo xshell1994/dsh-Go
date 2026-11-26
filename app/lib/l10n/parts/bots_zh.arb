@@ -375,6 +375,15 @@
     }
   },
   "botsGroupReplied": "群里有了回复",
+  "botsRoundReplies": "本轮 {count} 条回复",
+  "@botsRoundReplies": {
+    "placeholders": {
+      "count": {
+        "type": "int"
+      }
+    }
+  },
+  "botsRoundMissing": "这一轮有内容没送达",
   "botsNamedGroupReplied": "「{name}」里有了回复",
   "@botsNamedGroupReplied": {
     "placeholders": {

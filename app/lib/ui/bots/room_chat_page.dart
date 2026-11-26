@@ -193,7 +193,7 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
             speaker,
             l10n.botsNamedActivity(speaker.name, workPhrase(status.live.bots[speaker.id]) ?? l10n.botsTyping),
           );
-    final rows = transcriptRows(chat.items, pending: chat.pending, typing: typing);
+    final rows = roomTranscriptRows(chat.items, pending: chat.pending, typing: typing);
     final topInset = BotChatHeader.heightOf(context);
     final readOnly = status.readOnly != null;
 
@@ -226,6 +226,20 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
                   BotPendingRow(:final pending) => BotUserMessage(text: pending.text, pending: true),
                   BotStreamingRow() => const SizedBox.shrink(),
                   BotTypingRow(:final bot, :final label) => BotTypingLine(bot: bot, label: label),
+                  BotRoundRow(:final items) => GroupRound(
+                    items: items,
+                    itemBuilder: (context, item, continued) => GroupMessage(
+                      item: item,
+                      bot: team.bot(item.botId),
+                      continued: continued,
+                      admin: item.botId != null && item.botId == room.admin,
+                      onOpenBot: team.bot(item.botId) == null
+                          ? null
+                          : () => Navigator.of(context).push(BotChatPage.route(item.botId!)),
+                      onShowAll: item.whole == null ? null : () => _showAll(item, fullTextScope),
+                    ),
+                  ),
+                  BotGapRow(:final item) => GroupGap(reason: roomEventText(item)),
                   BotItemRow(:final item, :final continued) => switch (item.kind) {
                     DsBotItemKind.user => BotUserMessage(text: item.text, images: item.images),
                     DsBotItemKind.bot => GroupMessage(
@@ -250,7 +264,9 @@ class _RoomChatPageState extends ConsumerState<RoomChatPage> {
                         _ => null,
                       },
                     ),
-                    _ => const SizedBox.shrink(),
+                    // Anything the client cannot name is still the person's
+                    // chat: say what arrived rather than drop it silently.
+                    _ => item.text.isEmpty ? const SizedBox.shrink() : BotEventLine(text: item.text),
                   },
                 },
               ),

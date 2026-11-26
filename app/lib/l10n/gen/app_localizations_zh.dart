@@ -2402,6 +2402,13 @@ class L10nZh extends L10n {
 
   @override
   String get botsGroupReplied => '群里有了回复';
+  @override
+  String botsRoundReplies(int count) {
+    return '本轮 $count 条回复';
+  }
+
+  @override
+  String get botsRoundMissing => '这一轮有内容没送达';
 
   @override
   String botsNamedGroupReplied(String name) {
